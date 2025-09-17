@@ -8,7 +8,7 @@ import calendar
 from datetime import date
 
 from database import(job, run_schedule, 
-                    authenticate, get_db, 
+                    authenticate, 
                     get_daily_driver_counts, 
                     get_custom_driver_counts,
                     get_monthly_driver_counts, 
@@ -83,10 +83,9 @@ def reply_handler(reply_txt, days=1):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("start command called")
     user = update.effective_user
-    db = next(get_db())
     username = user.username if user else ""    
     
-    if authenticate(db, username):
+    if authenticate(username):
         await update.message.reply_text(f"Hello {username}, I am Little Sales Report Bot. Choose the options below:", reply_markup=reply_handler("start_keyboard"))
     else:
         await update.message.reply_text(f"Hello {username}, you are not allowed to use this bot. Contact the support team.", reply_markup=reply_handler("restart"))
@@ -94,7 +93,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global first_date, second_date
-    db = next(get_db())
     query = update.callback_query
     await query.answer()
 
@@ -105,8 +103,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "get_daily_report":
         username = update.effective_user.username
         today = date.today()
-        number_of_total_drivers, number_of_registration, number_of_reactivation  = get_daily_driver_counts(db, username)
-        registration_trip, reactivation_trip = get_trip_success(db, username, today=today)
+        number_of_total_drivers, number_of_registration, number_of_reactivation  = get_daily_driver_counts(username)
+        registration_trip, reactivation_trip = get_trip_success(username, today=today)
 
         await query.edit_message_text(
             text=   f"📊 Daily Report ({today})\n\n"
@@ -136,8 +134,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # today = date(2025, 6, 20)
         days = today.day
         second_date = int(query.data[11:])
-        number_of_total_drivers, number_of_registration, number_of_reactivation  = get_custom_driver_counts(db, username, first_date, second_date)
-        registration_trip, reactivation_trip = get_trip_success(db, username, first_date=first_date, second_date=second_date)
+        number_of_total_drivers, number_of_registration, number_of_reactivation  = get_custom_driver_counts(username, first_date, second_date)
+        registration_trip, reactivation_trip = get_trip_success(username, first_date=first_date, second_date=second_date)
 
         await query.edit_message_text(
             text=   f"📊 Custom Report\n\n"
@@ -154,8 +152,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Monthly report
     if query.data == "get_monthly_report":
         username = update.effective_user.username
-        number_of_total_drivers, number_of_registration, number_of_reactivation, today = get_monthly_driver_counts(db, username)
-        registration_trip, reactivation_trip = get_trip_success(db, username)
+        number_of_total_drivers, number_of_registration, number_of_reactivation, today = get_monthly_driver_counts(username)
+        registration_trip, reactivation_trip = get_trip_success(username)
         level = calculate_level(number_of_total_drivers)
 
         await query.edit_message_text(
@@ -171,17 +169,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "back_to_main_menu":
         user = update.effective_user
-        # db = next(get_db())
         username = user.username if user else ""    
         
         await query.edit_message_text(f"Hello {username}, I am Little Sales Report Bot. Choose the options below:", reply_markup=reply_handler("reports_keyboard"))
 
     if query.data == "restart":
         user = update.effective_user
-        db = next(get_db())
         username = user.username if user else ""
 
-        if authenticate(db, username):
+        if authenticate(username):
             await query.edit_message_text(f"Hello {username}, I am Little Sales Report Bot. Choose the options below:", reply_markup=reply_handler("start_keyboard"))
         else:
             await query.edit_message_text(f"Hello {username}, you are not allowed to use this bot. Contact the support team.", reply_markup=reply_handler("restart"))
@@ -196,8 +192,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
 
 
-# schedule.every(60).minutes.do(job)
-# threading.Thread(target=run_schedule, daemon=True).start()
+schedule.every(60).minutes.do(job)
+threading.Thread(target=run_schedule, daemon=True).start()
 # job()
 
 # if __name__ == "main":
