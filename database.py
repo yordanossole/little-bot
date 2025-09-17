@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Date, Integer, ForeignKey
+from sqlalchemy import create_engine, Column, String, Date, Integer, ForeignKey, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from pydantic import BaseModel
@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 import schedule
 import time
+import calendar
 
 engine = create_engine('sqlite:///database.db')
 Base = declarative_base()
@@ -25,6 +26,7 @@ class Registration(Base):
     entry_date = Column(Date, nullable=False, default=date(2060, 1, 1))
     status = Column(String, nullable=False, default="-")
     driver_phone = Column(String, nullable=False, default="-")
+    trip_no = Column(Integer, nullable=False, default=0)
     username = Column(Integer, ForeignKey("users.username"))
     user = relationship("User", back_populates="registrations")
 
@@ -55,21 +57,21 @@ import gspread
 from gspread import Client, Spreadsheet, Worksheet
 from google.oauth2.service_account import Credentials
 
-# SCOPES = [
-#     "https://www.googleapis.com/auth/spreadsheets",
-#     "https://www.googleapis.com/auth/drive"
-# ]
-# def setup_spreadsheet():
-#     creds = Credentials.from_service_account_file(filename="littlesalesreport.json", scopes=SCOPES)
-#     client = gspread.authorize(creds)
-#     spreadsheet = client.open("driver-approval")
-#     sheet = spreadsheet.worksheet("BotReport")
-#     return sheet
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+def setup_spreadsheet():
+    creds = Credentials.from_service_account_file(filename="littlesalesreport.json", scopes=SCOPES)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open("driver-approval")
+    sheet = spreadsheet.worksheet("BotReport")
+    return sheet
 
-# def fetch_all_records():
-#     sheet = setup_spreadsheet()
-#     records = sheet.get_all_records()
-#     return records
+def fetch_all_records():
+    sheet = setup_spreadsheet()
+    records = sheet.get_all_records()
+    return records
 
 def update_user(db: Session, records: list):
     for record in records:
@@ -90,7 +92,7 @@ def update_registration(db: Session, records: list):
         if registration:
             registration.status = record["status"]
             registration.entry_date = datetime.strptime(record["date"], "%m/%d/%Y").date()
-            # registration.driver_phone = record["driver_phone"]
+            registration.trip_no = record["trip_no"]
             registration.username = record["username"]
             db.add(registration)
             continue
@@ -115,71 +117,25 @@ def authenticate(db: Session, username: str):
         return True
     return False
 
-# def job():
-#     db = next(get_db())
-#     records = fetch_all_records()
-#     update_user(db, records)
-#     update_registration(db, records)
-#     db.close()
-#     print("Database Updated")
+def job():
+    db = next(get_db())
+    records = fetch_all_records()
+    update_user(db, records)
+    update_registration(db, records)
+    db.close()
+    print("Database Updated")
 
 def run_schedule():
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-def get_number_of_all_drivers(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    return db.query(Registration).filter(Registration.user == user, 
-                                         Registration.entry_date == today).count()
-
-def get_number_of_reactivation(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    return db.query(Registration).filter(Registration.user == user, 
-                                         Registration.entry_date == today,
-                                         Registration.status == "Reactivation").count()
-    
-def get_number_of_registration(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    return db.query(Registration).filter(Registration.user == user, 
-                                         Registration.entry_date == today,
-                                         Registration.status == "Registration").count()
-
-def get_monthly_number_of_all_drivers(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user).all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.month == today.month:
-                counter += 1
-    
-    return counter
-
-
-def get_monthly_number_of_reactivation(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user, 
-                                         Registration.status == "Reactivation").all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.month == today.month:
-                counter += 1
-    
-    return counter
-    
-def get_monthly_number_of_registration(db: Session, username: str, today: date):
-    user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user, 
-                                         Registration.status == "Registration").all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.month == today.month:
-                counter += 1
-    
-    return counter
+# ------------------------------------------------
+# get repot functions
+def month_range(year: int, month: int):
+    first_day = date(year, month, 1)
+    last_day = date(year, month, calendar.monthrange(year, month)[1])
+    return first_day, last_day
 
 def calculate_level(total_drivers: int):
     if total_drivers >= 200:
@@ -191,39 +147,167 @@ def calculate_level(total_drivers: int):
     else:
         return 0
     
-# Custom
-def get_custom_number_of_all_drivers(db: Session, username: str, today: date, first_date: int, second_date: int):
-    user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user).all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.day >= first_date and r.entry_date.day <= second_date:
-                counter += 1
-    
-    return counter
+# Daily report
+def get_daily_driver_counts(db: Session, username: str):
+    today = date.today()
+    count_rows = (
+        db.query(Registration.status, func.count(Registration.username))
+        .filter(
+            Registration.username == username,
+            Registration.entry_date == today
+        )
+        .group_by(Registration.status)
+        .all()
+    )
 
+    counts_dict = {status: count for status, count in count_rows}
 
-def get_custom_number_of_reactivation(db: Session, username: str, today: date, first_date: int, second_date: int):
+    reactivation = counts_dict.get("Reactivation", 0)
+    registration = counts_dict.get("Registration", 0)
+    all_drivers = reactivation + registration
+
+    return all_drivers, registration, reactivation
+
+# Custom report
+def get_custom_driver_counts(db: Session, username: str, first_date: int | date, second_date: int | date):
+    today = date.today()
+    first_date = date(today.year, today.month, first_date)
+    second_date = date(today.year, today.month, second_date)
+
+    count_rows = (
+        db.query(Registration.status, func.count(Registration.username))
+        .filter(
+            Registration.username == username,
+            Registration.entry_date.between(
+                first_date, 
+                second_date)
+        )
+        .group_by(Registration.status)
+        .all()
+    )
+
+    counts_dict = {status: count for status, count in count_rows}
+
+    reactivation = counts_dict.get("Reactivation", 0)
+    registration = counts_dict.get("Registration", 0)
+    all_drivers = reactivation + registration
+
+    return all_drivers, registration, reactivation
+
+# Monthly report
+def get_monthly_driver_counts(db: Session, username: str):
+    today = date.today()
+    last_date_of_this_month = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
+
+    if today != last_date_of_this_month:
+        if today.month == 1:
+            today = date(today.year - 1, 12, 15)
+        else:
+            today = date(today.year, today.month - 1, 15)
+    
+    first_date_of_the_month, last_date_of_the_month = month_range(today.year, today.month)
+    
+    count_rows = (
+        db.query(Registration.status, func.count(Registration.username))
+        .filter(
+            Registration.username == username,
+            Registration.entry_date.between(
+                first_date_of_the_month, 
+                last_date_of_the_month)
+        )
+        .group_by(Registration.status)
+        .all()
+    )
+
+    counts_dict = {status: count for status, count in count_rows}
+
+    reactivation = counts_dict.get("Reactivation", 0)
+    registration = counts_dict.get("Registration", 0)
+    all_drivers = reactivation + registration
+
+    return all_drivers, registration, reactivation, first_date_of_the_month
+        
+
+# Trip success report
+def get_trip_success(db: Session, 
+                     username: str, 
+                     today: date | None = None, 
+                     first_date: int | None = None, 
+                     second_date: int | None = None):
     user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user, 
-                                         Registration.status == "Reactivation").all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.day >= first_date and r.entry_date.day <= second_date:
-                counter += 1
+
+    # custom
+    if first_date and second_date:
+        today = date.today()
+        first_day = date(today.year, today.month, first_date)
+        second_day = date(today.year, today.month, second_date)
+
+        registration = db.query(Registration).filter(Registration.user == user,
+                                                    # Registration.entry_date.month == date.today().month,
+                                                    Registration.entry_date.between(first_day, second_day),
+                                                    Registration.status == "Registration",
+                                                    Registration.trip_no > 0).count()
     
-    return counter
+        reactivation = db.query(Registration).filter(Registration.user == user,
+                                                    # Registration.entry_date.month == date.today().month,
+                                                    Registration.entry_date.between(first_day, second_day),
+                                                    Registration.status == "Reactivation",
+                                                    Registration.trip_no > 0).count()
+        print("custom trip detail")
+        return registration, reactivation
+
+    # daily
+    if today:
+        print(today)
+        registration = db.query(Registration).filter(Registration.user == user,
+                                                    Registration.entry_date == today,
+                                                    Registration.status == "Registration",
+                                                    Registration.trip_no > 0).count()
+        
+        reactivation = db.query(Registration).filter(Registration.user == user,
+                                                    Registration.entry_date == today,
+                                                    Registration.status == "Reactivation",
+                                                    Registration.trip_no > 0).count()
+        print("daily trip detail")
+        return registration, reactivation
     
-def get_custom_number_of_registration(db: Session, username: str, today: date, first_date: int, second_date: int):
-    user = db.query(User).filter(User.username == username).first()
-    registrations = db.query(Registration).filter(Registration.user == user, 
-                                         Registration.status == "Registration").all()
-    counter = 0
-    if registrations:
-        for r in registrations:
-            if r.entry_date.day >= first_date and r.entry_date.day <= second_date:
-                counter += 1
-    
-    return counter
+    # monthly
+    if not today and not first_date and not second_date:
+        today = date.today()
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        if today.day == last_day:
+            first_day, last_day = month_range(today.year, today.month)
+
+            registration = db.query(Registration).filter(Registration.user == user,
+                                                        Registration.entry_date.between(first_day, last_day),
+                                                        Registration.status == "Registration",
+                                                        Registration.trip_no > 0).count()
+            
+            reactivation = db.query(Registration).filter(Registration.user == user,
+                                                        Registration.entry_date.between(first_day, last_day),
+                                                        Registration.status == "Reactivation",
+                                                        Registration.trip_no > 0).count()
+            print("monthly trip detail at the end of the month")
+            return registration, reactivation  
+        
+        else:
+            if today.month == 1:
+                last_month_day = date(today.year - 1, 12, 15)
+            else:
+                last_month_day = date(today.year, today.month - 1, 15)
+
+            first_day, last_day = month_range(last_month_day.year, last_month_day.month)
+            
+
+            registration = db.query(Registration).filter(Registration.user == user,
+                                                        Registration.entry_date.between(first_day, last_day),
+                                                        Registration.status == "Registration",
+                                                        Registration.trip_no > 0).count()
+            
+            reactivation = db.query(Registration).filter(Registration.user == user,
+                                                        Registration.entry_date.between(first_day, last_day),
+                                                        Registration.status == "Reactivation",
+                                                        Registration.trip_no > 0).count()
+            print("monthly trip detail of last month")
+            return registration, reactivation  
+    return 0, 0
